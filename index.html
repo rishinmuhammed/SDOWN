@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>8-Set Automated Dashboard</title>
     <style>
         :root {
@@ -17,25 +17,28 @@
             --status-wait: #ffcc00;
         }
 
+        * {
+            box-sizing: border-box;
+        }
+
         body { 
-            font-family: 'Segoe UI', sans-serif; 
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif; 
             background: var(--bg-color); 
             color: white; 
             margin: 0; 
             padding: 10px;
             display: flex;
             flex-direction: column;
-            height: 100vh;
-            overflow: hidden;
+            min-height: 100vh;
         }
 
         #dashboard {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            grid-template-rows: repeat(2, 1fr);
             gap: 10px;
             flex-grow: 1;
             padding: 5px;
+            margin-bottom: 10px;
         }
 
         .set-container {
@@ -89,11 +92,107 @@
             transform: scale(1.02); 
             z-index: 10;
         }
+
+        /* --- BOTTOM LOG PANEL --- */
+        #log-panel {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px;
+            margin: 5px;
+            max-height: 160px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            color: #aaa;
+        }
+
+        .clear-btn {
+            background: #333;
+            color: #ccc;
+            border: none;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.7rem;
+        }
+        .clear-btn:hover { background: #444; color: white; }
+
+        #log-content {
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.85rem;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .log-entry {
+            color: var(--accent-green);
+            background: #111;
+            padding: 4px 8px;
+            border-left: 3px solid var(--alert-red);
+            border-radius: 2px;
+            font-weight: bold;
+        }
+
+        .log-empty {
+            color: #555;
+            font-style: italic;
+        }
+
+        /* --- RESPONSIVE MEDIA QUERIES --- */
+        @media (max-width: 1024px) {
+            #dashboard {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 6px;
+                overflow-y: auto;
+            }
+
+            #dashboard {
+                grid-template-columns: 1fr;
+                gap: 8px;
+            }
+
+            .set-container { padding: 10px; }
+            .set-title { font-size: 0.9rem; }
+            .set-clock { font-size: 1.3rem; }
+            .bar-row { height: 48px; padding: 0 14px; }
+            .bar-num { font-size: 1.2rem; }
+            .bar-status { font-size: 1.1rem; }
+        }
     </style>
 </head>
 <body>
 
     <div id="dashboard"></div>
+
+    <!-- LOG PANEL AT THE BOTTOM -->
+    <div id="log-panel">
+        <div class="log-header">
+            <span>SIMULTANEOUS R & S TRIGGER LOG</span>
+            <button class="clear-btn" onclick="clearLogs()">Clear Log</button>
+        </div>
+        <div id="log-content">
+            <span class="log-empty">Monitoring for simultaneous R + S triggers...</span>
+        </div>
+    </div>
 
     <script>
         const clockConfigs = [
@@ -109,6 +208,7 @@
 
         const barLabels = ["R", "S"];
         let setEngines = [];
+        let lastLoggedSecond = ""; // Prevents duplicate logging within the same second
 
         function getZonedTime(offsetHrs, shiftSecs) {
             const now = new Date();
@@ -218,6 +318,10 @@
         }
 
         function masterTick() {
+            const systemTimeStr = new Date().toTimeString().split(' ')[0];
+            let activeRClocks = [];
+            let activeSClocks = [];
+
             setEngines.forEach(set => {
                 const prevDate = set.currentTime.getDate();
                 set.currentTime = getZonedTime(set.offsetHrs, set.shiftSecs);
@@ -234,9 +338,14 @@
                     const rowEl = document.getElementById(`s${set.id}-r${b}`);
                     const nextEl = document.getElementById(`s${set.id}-next-${b}`);
 
-                    if (set.schedule.some(item => item.bar === b && item.timeStr === nowStr)) {
+                    const isMatch = set.schedule.some(item => item.bar === b && item.timeStr === nowStr);
+                    
+                    if (isMatch) {
                         rowEl.classList.add('match-flash');
                         setTimeout(() => rowEl.classList.remove('match-flash'), 2000);
+                        
+                        if (b === "R") activeRClocks.push(set.name);
+                        if (b === "S") activeSClocks.push(set.name);
                     }
 
                     const upcoming = set.schedule
@@ -246,6 +355,37 @@
                     nextEl.innerText = upcoming ? upcoming.timeStr : "DONE";
                 });
             });
+
+            // STRICT DUAL TRIGGER: Logs ONLY when at least one R and at least one S blink simultaneously
+            if (activeRClocks.length > 0 && activeSClocks.length > 0 && lastLoggedSecond !== systemTimeStr) {
+                lastLoggedSecond = systemTimeStr;
+
+                let rText = `R (${activeRClocks.join(', ')})`;
+                let sText = `S (${activeSClocks.join(', ')})`;
+                
+                let logStr = `${rText} ${sText} @ ${systemTimeStr}`;
+                addLogEntry(logStr);
+            }
+        }
+
+        function addLogEntry(message) {
+            const logContent = document.getElementById('log-content');
+            const emptyLabel = logContent.querySelector('.log-empty');
+            if (emptyLabel) {
+                emptyLabel.remove();
+            }
+
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerText = message;
+
+            logContent.insertBefore(entry, logContent.firstChild);
+        }
+
+        function clearLogs() {
+            const logContent = document.getElementById('log-content');
+            logContent.innerHTML = '<span class="log-empty">Monitoring for simultaneous R + S triggers...</span>';
+            lastLoggedSecond = "";
         }
 
         window.onload = initDashboard;
